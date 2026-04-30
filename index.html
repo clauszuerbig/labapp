@@ -6,18 +6,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="manifest.json">
 <script src="https://unpkg.com/html5-qrcode"></script>
+
 <style>
 body { font-family: Arial; margin: 15px; }
 #reader { max-width:400px; margin-bottom:20px; }
 .film { border:1px solid #ccc; padding:10px; margin-bottom:10px; }
-button { padding:10px; margin:5px 0; }
+button { padding:10px; margin:5px 5px 5px 0; }
+.dashboard { padding:10px; border:1px solid #000; margin-bottom:15px; }
+.print-area { display:none; }
+@media print {
+  body * { display:none; }
+  .print-area, .print-area * { display:block; }
+}
 </style>
 </head>
+
 <body>
 
 <h2>📷 Filmlabor</h2>
+
 <button onclick="startScanner()">Scan starten</button>
+<button onclick="printLabels()">Etiketten drucken</button>
+<button onclick="exportData()">Backup speichern</button>
+<button onclick="importData()">Backup laden</button>
+<input type="file" id="fileInput" style="display:none" onchange="loadFile(event)">
+
 <div id="reader"></div>
+
+<div class="dashboard" id="dashboard"></div>
 
 <h3>Filter</h3>
 <select id="filter" onchange="renderStored()">
@@ -28,6 +44,11 @@ button { padding:10px; margin:5px 0; }
 
 <h3>Aufträge</h3>
 <div id="orders"></div>
+
+<h3>📓 Laborjournal</h3>
+<div id="journal"></div>
+
+<div class="print-area" id="printArea"></div>
 
 <script>
 const FilmStatus = ["Eingegangen","Entwickelt","Gescannt","Fertig"];
@@ -64,6 +85,7 @@ function generateOrder(data){
 
 function saveOrder(order){
   let orders = JSON.parse(localStorage.getItem("orders")||"[]");
+  order.createdAt = new Date().toISOString();
   orders.unshift(order);
   localStorage.setItem("orders", JSON.stringify(orders));
 }
@@ -75,11 +97,17 @@ function renderStored(){
   let orders = JSON.parse(localStorage.getItem("orders")||"[]");
   const filter = document.getElementById("filter").value;
 
+  let total = 0;
+  let fertig = 0;
+
   orders.forEach((order, oIndex)=>{
     const div = document.createElement("div");
     div.innerHTML = "<h4>"+order.orderNumber+" – "+order.name+"</h4>";
 
     order.films.forEach((film,fIndex)=>{
+      total++;
+      if(film.status==="Fertig") fertig++;
+
       if(filter==="offen" && film.status==="Fertig") return;
       if(filter==="fertig" && film.status!=="Fertig") return;
 
@@ -99,6 +127,41 @@ function renderStored(){
 
     container.appendChild(div);
   });
+
+  document.getElementById("dashboard").innerHTML = `
+    <strong>Dashboard</strong><br>
+    Gesamt: ${total}<br>
+    Offen: ${total - fertig}<br>
+    Fertig: ${fertig}
+  `;
+
+  renderJournal();
+}
+
+function renderJournal(){
+  const container = document.getElementById("journal");
+  container.innerHTML = "";
+
+  let orders = JSON.parse(localStorage.getItem("orders")||"[]");
+
+  orders.forEach(order => {
+    const date = new Date(order.createdAt || Date.now()).toLocaleString("de-DE");
+    const totalFilms = order.films.length;
+    const fertig = order.films.filter(f => f.status === "Fertig").length;
+
+    const div = document.createElement("div");
+    div.className = "film";
+
+    div.innerHTML = `
+      <strong>${order.orderNumber}</strong><br>
+      ${order.name}<br>
+      Datum: ${date}<br>
+      Filme: ${totalFilms}<br>
+      Status: ${fertig}/${totalFilms} fertig
+    `;
+
+    container.appendChild(div);
+  });
 }
 
 function updateStatus(o,f,value){
@@ -106,6 +169,56 @@ function updateStatus(o,f,value){
   orders[o].films[f].status = value;
   localStorage.setItem("orders", JSON.stringify(orders));
   renderStored();
+}
+
+function printLabels(){
+  const orders = JSON.parse(localStorage.getItem("orders")||"[]");
+  const printArea = document.getElementById("printArea");
+  printArea.innerHTML = "";
+
+  orders.forEach(order=>{
+    order.films.forEach(film=>{
+      const div = document.createElement("div");
+      div.style.marginBottom = "10px";
+      div.innerHTML = `<strong>${film.filmNumber}</strong>`;
+      printArea.appendChild(div);
+    });
+  });
+
+  window.print();
+}
+
+function exportData(){
+  const data = localStorage.getItem("orders") || "[]";
+  const blob = new Blob([data], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "filmlabor-backup.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(){
+  document.getElementById("fileInput").click();
+}
+
+function loadFile(event){
+  const file = event.target.files[0];
+  if(!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try {
+      const data = JSON.parse(e.target.result);
+      localStorage.setItem("orders", JSON.stringify(data));
+      renderStored();
+      alert("Backup geladen");
+    } catch {
+      alert("Fehlerhafte Datei");
+    }
+  };
+  reader.readAsText(file);
 }
 
 if ('serviceWorker' in navigator) {
