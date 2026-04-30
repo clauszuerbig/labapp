@@ -53,6 +53,31 @@ button { padding:10px; margin:5px 5px 5px 0; }
 <script>
 const FilmStatus = ["Eingegangen","Entwickelt","Gescannt","Fertig"];
 
+function generateOrderNumber(){
+  const d = new Date();
+  const date =
+    d.getFullYear().toString().slice(2) +
+    String(d.getMonth()+1).padStart(2,"0") +
+    String(d.getDate()).padStart(2,"0");
+
+  let orders = JSON.parse(localStorage.getItem("orders") || "[]");
+
+  const todayOrders = orders.filter(o => {
+    if(!o.orderNumber) return false;
+    return o.orderNumber.startsWith("FL-" + date);
+  });
+
+  let max = 0;
+  todayOrders.forEach(o => {
+    const parts = o.orderNumber.split("-");
+    const num = parseInt(parts[2]);
+    if(num > max) max = num;
+  });
+
+  const next = max + 1;
+  return "FL-" + date + "-" + String(next).padStart(3,"0");
+}
+
 function startScanner(){
   const scanner = new Html5Qrcode("reader");
   scanner.start({ facingMode: "environment" }, { fps:10, qrbox:250 },
@@ -75,17 +100,26 @@ function handleQR(text){
 }
 
 function generateOrder(data){
-  data.films = data.films.map((f,i)=>({
-    ...f,
-    filmNumber: data.orderNumber+"-"+String(i+1).padStart(2,"0"),
-    status:"Eingegangen"
+  const orderNumber = generateOrderNumber();
+
+  const films = (data.films || []).map((f,i)=>({
+    type: f.type || "Unbekannt",
+    format: f.format || "Unbekannt",
+    scan: f.scan || false,
+    filmNumber: orderNumber + "-" + String(i+1).padStart(2,"0"),
+    status: "Eingegangen"
   }));
-  return data;
+
+  return {
+    orderNumber: orderNumber,
+    name: data.name || "Unbekannt",
+    createdAt: new Date().toISOString(),
+    films: films
+  };
 }
 
 function saveOrder(order){
   let orders = JSON.parse(localStorage.getItem("orders")||"[]");
-  order.createdAt = new Date().toISOString();
   orders.unshift(order);
   localStorage.setItem("orders", JSON.stringify(orders));
 }
