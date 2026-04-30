@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Filmlabor PWA</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="manifest.json">
+<script src="https://unpkg.com/html5-qrcode"></script>
+<style>
+body { font-family: Arial; margin: 15px; }
+#reader { max-width:400px; margin-bottom:20px; }
+.film { border:1px solid #ccc; padding:10px; margin-bottom:10px; }
+button { padding:10px; margin:5px 0; }
+</style>
+</head>
+<body>
+
+<h2>📷 Filmlabor</h2>
+<button onclick="startScanner()">Scan starten</button>
+<div id="reader"></div>
+
+<h3>Filter</h3>
+<select id="filter" onchange="renderStored()">
+<option value="all">Alle</option>
+<option value="offen">Offen</option>
+<option value="fertig">Fertig</option>
+</select>
+
+<h3>Aufträge</h3>
+<div id="orders"></div>
+
+<script>
+const FilmStatus = ["Eingegangen","Entwickelt","Gescannt","Fertig"];
+
+function startScanner(){
+  const scanner = new Html5Qrcode("reader");
+  scanner.start({ facingMode: "environment" }, { fps:10, qrbox:250 },
+    (text) => {
+      scanner.stop();
+      handleQR(text);
+    }
+  );
+}
+
+function handleQR(text){
+  try {
+    const data = JSON.parse(text);
+    const order = generateOrder(data);
+    saveOrder(order);
+    renderStored();
+  } catch(e){
+    alert("QR ungültig");
+  }
+}
+
+function generateOrder(data){
+  data.films = data.films.map((f,i)=>({
+    ...f,
+    filmNumber: data.orderNumber+"-"+String(i+1).padStart(2,"0"),
+    status:"Eingegangen"
+  }));
+  return data;
+}
+
+function saveOrder(order){
+  let orders = JSON.parse(localStorage.getItem("orders")||"[]");
+  orders.unshift(order);
+  localStorage.setItem("orders", JSON.stringify(orders));
+}
+
+function renderStored(){
+  const container = document.getElementById("orders");
+  container.innerHTML = "";
+
+  let orders = JSON.parse(localStorage.getItem("orders")||"[]");
+  const filter = document.getElementById("filter").value;
+
+  orders.forEach((order, oIndex)=>{
+    const div = document.createElement("div");
+    div.innerHTML = "<h4>"+order.orderNumber+" – "+order.name+"</h4>";
+
+    order.films.forEach((film,fIndex)=>{
+      if(filter==="offen" && film.status==="Fertig") return;
+      if(filter==="fertig" && film.status!=="Fertig") return;
+
+      const fDiv = document.createElement("div");
+      fDiv.className="film";
+
+      fDiv.innerHTML = `
+        <strong>${film.filmNumber}</strong><br>
+        ${film.type} – ${film.format}<br>
+        <select onchange="updateStatus(${oIndex},${fIndex}, this.value)">
+          ${FilmStatus.map(s=>`<option ${s===film.status?"selected":""}>${s}</option>`).join("")}
+        </select>
+      `;
+
+      div.appendChild(fDiv);
+    });
+
+    container.appendChild(div);
+  });
+}
+
+function updateStatus(o,f,value){
+  let orders = JSON.parse(localStorage.getItem("orders"));
+  orders[o].films[f].status = value;
+  localStorage.setItem("orders", JSON.stringify(orders));
+  renderStored();
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js');
+}
+
+renderStored();
+</script>
+
+</body>
+</html>
