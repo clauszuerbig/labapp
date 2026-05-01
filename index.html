@@ -2,185 +2,250 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Filmlabor</title>
+<title>Filmlabor Pro Sync</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
 <style>
-body { font-family: Arial; margin:0; }
-
-.landing {
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-  height:100vh;
-  text-align:center;
-  background:#fafafa;
-}
-
-.landing h1 { font-size:28px; margin-bottom:10px; }
-.landing p { color:#666; margin-bottom:30px; }
-
-.landing button {
-  padding:15px 25px;
-  margin:10px;
-  font-size:16px;
-}
-
-.app { display:none; padding:15px; }
-
-.dashboard { border:1px solid #000; padding:10px; margin-bottom:15px; }
-
-.film { border:1px solid #ccc; padding:10px; margin-bottom:10px; }
-
-button { padding:10px; margin:5px; }
-
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#f2f2f2;}
+.header{padding:15px;background:white;border-bottom:1px solid #ddd;font-weight:600;}
+.container{display:grid;grid-template-columns:1fr 2fr;height:100vh;}
+.sidebar{background:#fff;border-right:1px solid #ddd;padding:10px;}
+.main{padding:20px;}
+.card{background:white;padding:15px;border-radius:12px;margin-bottom:10px;}
+.film{margin-top:10px;border-top:1px solid #eee;padding-top:10px;}
 </style>
 </head>
 
 <body>
 
-<!-- LANDING -->
-<div class="landing" id="landing">
-  <h1>📷 Filmlabor</h1>
-  <p>Analoges Labor – Aufträge verwalten</p>
+<div class="header">Filmlabor Pro</div>
 
-  <button onclick="enterApp()">📷 Auftrag scannen</button>
-  <button onclick="enterApp()">📋 Labor öffnen</button>
+<div class="container">
+
+<div class="sidebar">
+<button onclick="startScanner()">📷 Scan</button>
+<button onclick="showJournal()">📓 Journal</button>
+<button onclick="saveToICloud()">☁️ Speichern</button>
+<button onclick="loadFromICloud()">☁️ Laden</button>
+
+<div id="syncStatus" style="font-size:12px;color:#666;margin-top:10px;">
+Nicht synchronisiert
 </div>
 
-<!-- APP -->
-<div class="app" id="app">
+<input id="searchInput" placeholder="Suche..." oninput="showJournal()" style="width:100%;margin-top:10px;">
+<div id="orderList"></div>
+</div>
 
-<h2>Filmlabor</h2>
-
-<button onclick="startScanner()">Scan</button>
-<button onclick="printLabels()">Etiketten</button>
-
-<div id="dashboard"></div>
-
-<h3>Aufträge</h3>
-<div id="orders"></div>
+<div class="main">
+<div id="detail"></div>
+</div>
 
 </div>
 
 <script src="https://unpkg.com/html5-qrcode"></script>
 
 <script>
-function enterApp(){
-  document.getElementById("landing").style.display="none";
-  document.getElementById("app").style.display="block";
-  renderStored();
+
+let selected=null;
+let fileHandle=null;
+
+// ---------- SYNC ----------
+
+function updateSyncTime(){
+ const now=new Date().toLocaleTimeString("de-DE");
+ localStorage.setItem("lastSync",now);
+ document.getElementById("syncStatus").innerText="Zuletzt synchronisiert: "+now;
 }
 
-// --- bestehende Logik gekürzt aber funktionsfähig ---
+function initSyncStatus(){
+ const last=localStorage.getItem("lastSync");
+ if(last){
+  document.getElementById("syncStatus").innerText="Zuletzt synchronisiert: "+last;
+ }
+}
 
-const FilmStatus = ["Eingegangen","Fertig"];
+async function saveToICloud(){
+ const data=localStorage.getItem("orders")||"[]";
+ const blob=new Blob([data],{type:"application/json"});
+
+ fileHandle=await window.showSaveFilePicker({
+  suggestedName:"filmlabor.json"
+ });
+
+ const writable=await fileHandle.createWritable();
+ await writable.write(blob);
+ await writable.close();
+
+ updateSyncTime();
+}
+
+async function loadFromICloud(){
+ [fileHandle]=await window.showOpenFilePicker();
+ const file=await fileHandle.getFile();
+ const text=await file.text();
+ localStorage.setItem("orders",text);
+ updateSyncTime();
+ render();
+}
+
+async function autoSave(){
+ if(!fileHandle) return;
+ const data=localStorage.getItem("orders")||"[]";
+ const writable=await fileHandle.createWritable();
+ await writable.write(data);
+ await writable.close();
+ updateSyncTime();
+}
+
+// ---------- CORE ----------
 
 function generateOrderNumber(){
-  const d=new Date();
-  const date =
-    d.getFullYear().toString().slice(2)+
-    String(d.getMonth()+1).padStart(2,"0")+
-    String(d.getDate()).padStart(2,"0");
-
-  let orders = JSON.parse(localStorage.getItem("orders")||"[]");
-
-  let max=0;
-  orders.forEach(o=>{
-    if(o.orderNumber && o.orderNumber.startsWith("FL-"+date)){
-      const num=parseInt(o.orderNumber.split("-")[2]);
-      if(num>max) max=num;
-    }
-  });
-
-  return "FL-"+date+"-"+String(max+1).padStart(3,"0");
+ const d=new Date();
+ const date=d.getFullYear().toString().slice(2)+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0");
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ let max=0;
+ orders.forEach(o=>{
+  if(o.orderNumber && o.orderNumber.startsWith("FL-"+date)){
+    const n=parseInt(o.orderNumber.split("-")[2]);
+    if(n>max) max=n;
+  }
+ });
+ return "FL-"+date+"-"+String(max+1).padStart(3,"0");
 }
 
 function startScanner(){
-  const scanner=new Html5Qrcode("app");
-
-  scanner.start({facingMode:"environment"},{fps:10,qrbox:250},
-    text=>{
-      scanner.stop();
-      handleQR(text);
-    }
-  );
+ const scanner=new Html5Qrcode("detail");
+ scanner.start({facingMode:"environment"},{fps:10,qrbox:250},
+  text=>{scanner.stop();handleQR(text);}
+ );
 }
 
 function handleQR(text){
-  try{
-    const data=JSON.parse(text);
-    const order=generateOrder(data);
-    saveOrder(order);
-    renderStored();
-  }catch{
-    alert("QR Fehler");
-  }
+ try{
+  const data=JSON.parse(text);
+  const order=generateOrder(data);
+  saveOrder(order);
+ }catch{alert("QR Fehler");}
 }
 
 function generateOrder(data){
-  const orderNumber=generateOrderNumber();
-
-  return {
-    orderNumber,
-    name:data.name||"Unbekannt",
-    films:(data.films||[]).map((f,i)=>({
-      filmNumber:orderNumber+"-"+String(i+1).padStart(2,"0"),
-      status:"Eingegangen"
-    }))
-  };
+ const orderNumber=generateOrderNumber();
+ return {
+  orderNumber,
+  name:data.name||"Unbekannt",
+  createdAt:new Date().toISOString(),
+  locked:false,
+  films:(data.films||[]).map((f,i)=>({
+    filmNumber:orderNumber+"-"+String(i+1).padStart(2,"0"),
+    tasks:{dev:true,scan:f.scan||false},
+    status:{dev:"offen",scan:f.scan?"offen":null}
+  }))
+ };
 }
 
 function saveOrder(order){
-  let orders=JSON.parse(localStorage.getItem("orders")||"[]");
-  orders.unshift(order);
-  localStorage.setItem("orders",JSON.stringify(orders));
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ orders.unshift(order);
+ localStorage.setItem("orders",JSON.stringify(orders));
+ autoSave();
+ render();
 }
 
-function renderStored(){
-  let orders=JSON.parse(localStorage.getItem("orders")||"[]");
-  const container=document.getElementById("orders");
-  container.innerHTML="";
-
-  let total=0, fertig=0;
-
-  orders.forEach((o,i)=>{
-    const div=document.createElement("div");
-    div.innerHTML="<strong>"+o.orderNumber+"</strong><br>"+o.name;
-
-    o.films.forEach((f,j)=>{
-      total++;
-      if(f.status==="Fertig") fertig++;
-
-      const fDiv=document.createElement("div");
-      fDiv.className="film";
-      fDiv.innerHTML=`
-        ${f.filmNumber}<br>
-        <select onchange="updateStatus(${i},${j},this.value)">
-          ${FilmStatus.map(s=>`<option ${s===f.status?"selected":""}>${s}</option>`).join("")}
-        </select>
-      `;
-      div.appendChild(fDiv);
-    });
-
-    container.appendChild(div);
-  });
-
-  document.getElementById("dashboard").innerHTML=
-    "Gesamt: "+total+" | Offen: "+(total-fertig)+" | Fertig: "+fertig;
+function render(){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ const list=document.getElementById("orderList");
+ list.innerHTML="";
+ orders.forEach((o,i)=>{
+  const div=document.createElement("div");
+  div.className="card";
+  div.innerText=o.orderNumber;
+  div.onclick=()=>showOrderDetail(i);
+  list.appendChild(div);
+ });
 }
 
-function updateStatus(o,f,v){
-  let orders=JSON.parse(localStorage.getItem("orders"));
-  orders[o].films[f].status=v;
-  localStorage.setItem("orders",JSON.stringify(orders));
-  renderStored();
+function showJournal(){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ const q=(document.getElementById("searchInput").value||"").toLowerCase();
+ const detail=document.getElementById("detail");
+ detail.innerHTML="";
+ orders.forEach((o,i)=>{
+  if(q && !(o.orderNumber+" "+o.name).toLowerCase().includes(q)) return;
+  const c=document.createElement("div");
+  c.className="card";
+  c.innerHTML="<strong>"+o.orderNumber+"</strong><br>"+o.name;
+  c.onclick=()=>showOrderDetail(i);
+  detail.appendChild(c);
+ });
 }
 
-function printLabels(){
-  window.print();
+function showOrderDetail(i){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ const o=orders[i];
+ const detail=document.getElementById("detail");
+ detail.innerHTML="";
+
+ const card=document.createElement("div");
+ card.className="card";
+ card.innerHTML="<button onclick='showJournal()'>←</button><br><br><strong>"+o.orderNumber+"</strong><br>"+o.name;
+
+ const btn=document.createElement("button");
+ btn.innerText=o.locked?"Abgeschlossen":"Abschließen";
+ btn.disabled=o.locked;
+ btn.onclick=()=>{o.locked=true;localStorage.setItem("orders",JSON.stringify(orders));autoSave();showOrderDetail(i);};
+
+ card.appendChild(btn);
+
+ o.films.forEach((f,fi)=>{
+  const div=document.createElement("div");
+  div.className="film";
+
+  let html="<strong>"+f.filmNumber+"</strong><br>";
+
+  if(f.tasks.dev){
+   html+=`Entwicklung <select ${o.locked?"disabled":""}
+   onchange="updateTask(${i},${fi},'dev',this.value)">
+   <option ${f.status.dev==="offen"?"selected":""}>offen</option>
+   <option ${f.status.dev==="fertig"?"selected":""}>fertig</option>
+   </select><br>`;
+  }
+
+  if(f.tasks.scan){
+   html+=`Scan <select ${o.locked?"disabled":""}
+   onchange="updateTask(${i},${fi},'scan',this.value)">
+   <option ${f.status.scan==="offen"?"selected":""}>offen</option>
+   <option ${f.status.scan==="fertig"?"selected":""}>fertig</option>
+   </select>`;
+  }
+
+  div.innerHTML=html;
+  card.appendChild(div);
+ });
+
+ detail.appendChild(card);
+
+ if(o.locked){
+  let dev=0,scan=0;
+  o.films.forEach(f=>{if(f.tasks.dev)dev++;if(f.tasks.scan)scan++;});
+  const pos=document.createElement("div");
+  pos.className="card";
+  pos.innerHTML="<strong>Rechnungspositionen</strong><br><br>"
+  +(dev? "Entwicklung ("+dev+"x)<br>":"")
+  +(scan? "Scan ("+scan+"x)":"");
+  detail.appendChild(pos);
+ }
 }
+
+function updateTask(o,f,t,v){
+ let orders=JSON.parse(localStorage.getItem("orders"));
+ orders[o].films[f].status[t]=v;
+ localStorage.setItem("orders",JSON.stringify(orders));
+ autoSave();
+ showOrderDetail(o);
+}
+
+initSyncStatus();
+render();
+
 </script>
 
 </body>
