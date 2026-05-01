@@ -2,16 +2,43 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Filmlabor Pro Sync</title>
+<title>Filmlabor Pro Scanner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#f2f2f2;}
-.header{padding:15px;background:white;border-bottom:1px solid #ddd;font-weight:600;}
+body {margin:0;font-family:-apple-system;background:#f2f2f2;}
+.header{padding:15px;background:white;border-bottom:1px solid #ddd;}
 .container{display:grid;grid-template-columns:1fr 2fr;height:100vh;}
-.sidebar{background:#fff;border-right:1px solid #ddd;padding:10px;}
+.sidebar{background:white;padding:10px;border-right:1px solid #ddd;}
 .main{padding:20px;}
-.card{background:white;padding:15px;border-radius:12px;margin-bottom:10px;}
-.film{margin-top:10px;border-top:1px solid #eee;padding-top:10px;}
+
+#scannerOverlay{
+ position:fixed;
+ inset:0;
+ background:black;
+ display:none;
+ z-index:9999;
+}
+
+#reader{
+ width:100%;
+ height:100%;
+ position:relative;
+}
+
+.scan-frame{
+ position:absolute;
+ top:50%;
+ left:50%;
+ width:250px;
+ height:250px;
+ transform:translate(-50%,-50%);
+ border:2px solid white;
+ box-shadow:0 0 0 9999px rgba(0,0,0,0.5);
+}
+
+button{padding:10px;margin-top:10px;}
+.card{background:white;padding:10px;margin-top:10px;border-radius:10px;}
 </style>
 </head>
 
@@ -23,251 +50,69 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background
 
 <div class="sidebar">
 <button onclick="startScanner()">📷 Scan</button>
-<button onclick="showJournal()">📓 Journal</button>
-<button onclick="saveToICloud()">☁️ Speichern</button>
-<button onclick="loadFromICloud()">☁️ Laden</button>
-
-<div id="syncStatus" style="font-size:12px;color:#666;margin-top:10px;">
-Nicht synchronisiert
-</div>
-
-<input id="searchInput" placeholder="Suche..." oninput="showJournal()" style="width:100%;margin-top:10px;">
 <div id="orderList"></div>
 </div>
 
 <div class="main">
-
-<!-- FIX: fester Scanner Container -->
-<div id="reader" style="width:100%; max-width:400px; margin-bottom:15px;"></div>
-
 <div id="detail"></div>
+</div>
 
 </div>
 
+<!-- Scanner Overlay -->
+<div id="scannerOverlay">
+  <div id="reader">
+    <div class="scan-frame"></div>
+  </div>
+  <button onclick="stopScanner()" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);">
+    Abbrechen
+  </button>
 </div>
 
 <script src="https://unpkg.com/html5-qrcode"></script>
 
 <script>
 
-let selected=null;
-let fileHandle=null;
-let scanner=null;
+let scanner;
+let scanning=false;
 
-// ---------- SYNC ----------
-
-function updateSyncTime(){
- const now=new Date().toLocaleTimeString("de-DE");
- localStorage.setItem("lastSync",now);
- document.getElementById("syncStatus").innerText="Zuletzt synchronisiert: "+now;
-}
-
-function initSyncStatus(){
- const last=localStorage.getItem("lastSync");
- if(last){
-  document.getElementById("syncStatus").innerText="Zuletzt synchronisiert: "+last;
- }
-}
-
-async function saveToICloud(){
- const data=localStorage.getItem("orders")||"[]";
- const blob=new Blob([data],{type:"application/json"});
-
- fileHandle=await window.showSaveFilePicker({
-  suggestedName:"filmlabor.json"
- });
-
- const writable=await fileHandle.createWritable();
- await writable.write(blob);
- await writable.close();
-
- updateSyncTime();
-}
-
-async function loadFromICloud(){
- [fileHandle]=await window.showOpenFilePicker();
- const file=await fileHandle.getFile();
- const text=await file.text();
- localStorage.setItem("orders",text);
- updateSyncTime();
- render();
-}
-
-async function autoSave(){
- if(!fileHandle) return;
- const data=localStorage.getItem("orders")||"[]";
- const writable=await fileHandle.createWritable();
- await writable.write(data);
- await writable.close();
- updateSyncTime();
-}
-
-// ---------- CORE ----------
-
-function generateOrderNumber(){
- const d=new Date();
- const date=d.getFullYear().toString().slice(2)+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0");
- let orders=JSON.parse(localStorage.getItem("orders")||"[]");
- let max=0;
- orders.forEach(o=>{
-  if(o.orderNumber && o.orderNumber.startsWith("FL-"+date)){
-    const n=parseInt(o.orderNumber.split("-")[2]);
-    if(n>max) max=n;
-  }
- });
- return "FL-"+date+"-"+String(max+1).padStart(3,"0");
-}
-
-// ---------- FIXED SCANNER ----------
 function startScanner(){
+ document.getElementById("scannerOverlay").style.display="block";
 
- if(scanner){
-   scanner.stop().catch(()=>{});
- }
-
- scanner = new Html5Qrcode("reader");
+ scanner=new Html5Qrcode("reader");
+ scanning=true;
 
  scanner.start(
-  { facingMode:"environment" },
-  { fps:10, qrbox:250 },
-  text=>{
-    scanner.stop();
+  {facingMode:"environment"},
+  {fps:10,qrbox:250},
+  async(text)=>{
+    if(!scanning) return;
+    scanning=false;
+
+    await scanner.stop();
+    document.getElementById("scannerOverlay").style.display="none";
+
     handleQR(text);
   }
- ).catch(err=>{
-   alert("Kamera konnte nicht gestartet werden. Prüfe HTTPS + Safari.");
-   console.error(err);
- });
+ );
+}
+
+function stopScanner(){
+ scanning=false;
+ if(scanner){
+  scanner.stop().catch(()=>{});
+ }
+ document.getElementById("scannerOverlay").style.display="none";
 }
 
 function handleQR(text){
  try{
   const data=JSON.parse(text);
-  const order=generateOrder(data);
-  saveOrder(order);
+  alert("QR OK: "+data.name);
  }catch{
-  alert("QR Fehler oder falsches Format");
+  alert("QR gelesen: "+text);
  }
 }
-
-function generateOrder(data){
- const orderNumber=generateOrderNumber();
- return {
-  orderNumber,
-  name:data.name||"Unbekannt",
-  createdAt:new Date().toISOString(),
-  locked:false,
-  films:(data.films||[]).map((f,i)=>({
-    filmNumber:orderNumber+"-"+String(i+1).padStart(2,"0"),
-    tasks:{dev:true,scan:f.scan||false},
-    status:{dev:"offen",scan:f.scan?"offen":null}
-  }))
- };
-}
-
-function saveOrder(order){
- let orders=JSON.parse(localStorage.getItem("orders")||"[]");
- orders.unshift(order);
- localStorage.setItem("orders",JSON.stringify(orders));
- autoSave();
- render();
-}
-
-function render(){
- let orders=JSON.parse(localStorage.getItem("orders")||"[]");
- const list=document.getElementById("orderList");
- list.innerHTML="";
- orders.forEach((o,i)=>{
-  const div=document.createElement("div");
-  div.className="card";
-  div.innerText=o.orderNumber;
-  div.onclick=()=>showOrderDetail(i);
-  list.appendChild(div);
- });
-}
-
-function showJournal(){
- let orders=JSON.parse(localStorage.getItem("orders")||"[]");
- const q=(document.getElementById("searchInput").value||"").toLowerCase();
- const detail=document.getElementById("detail");
- detail.innerHTML="";
- orders.forEach((o,i)=>{
-  if(q && !(o.orderNumber+" "+o.name).toLowerCase().includes(q)) return;
-  const c=document.createElement("div");
-  c.className="card";
-  c.innerHTML="<strong>"+o.orderNumber+"</strong><br>"+o.name;
-  c.onclick=()=>showOrderDetail(i);
-  detail.appendChild(c);
- });
-}
-
-function showOrderDetail(i){
- let orders=JSON.parse(localStorage.getItem("orders")||"[]");
- const o=orders[i];
- const detail=document.getElementById("detail");
- detail.innerHTML="";
-
- const card=document.createElement("div");
- card.className="card";
- card.innerHTML="<button onclick='showJournal()'>←</button><br><br><strong>"+o.orderNumber+"</strong><br>"+o.name;
-
- const btn=document.createElement("button");
- btn.innerText=o.locked?"Abgeschlossen":"Abschließen";
- btn.disabled=o.locked;
- btn.onclick=()=>{o.locked=true;localStorage.setItem("orders",JSON.stringify(orders));autoSave();showOrderDetail(i);};
-
- card.appendChild(btn);
-
- o.films.forEach((f,fi)=>{
-  const div=document.createElement("div");
-  div.className="film";
-
-  let html="<strong>"+f.filmNumber+"</strong><br>";
-
-  if(f.tasks.dev){
-   html+=`Entwicklung <select ${o.locked?"disabled":""}
-   onchange="updateTask(${i},${fi},'dev',this.value)">
-   <option ${f.status.dev==="offen"?"selected":""}>offen</option>
-   <option ${f.status.dev==="fertig"?"selected":""}>fertig</option>
-   </select><br>`;
-  }
-
-  if(f.tasks.scan){
-   html+=`Scan <select ${o.locked?"disabled":""}
-   onchange="updateTask(${i},${fi},'scan',this.value)">
-   <option ${f.status.scan==="offen"?"selected":""}>offen</option>
-   <option ${f.status.scan==="fertig"?"selected":""}>fertig</option>
-   </select>`;
-  }
-
-  div.innerHTML=html;
-  card.appendChild(div);
- });
-
- detail.appendChild(card);
-
- if(o.locked){
-  let dev=0,scan=0;
-  o.films.forEach(f=>{if(f.tasks.dev)dev++;if(f.tasks.scan)scan++;});
-  const pos=document.createElement("div");
-  pos.className="card";
-  pos.innerHTML="<strong>Rechnungspositionen</strong><br><br>"
-  +(dev? "Entwicklung ("+dev+"x)<br>":"")
-  +(scan? "Scan ("+scan+"x)":"");
-  detail.appendChild(pos);
- }
-}
-
-function updateTask(o,f,t,v){
- let orders=JSON.parse(localStorage.getItem("orders"));
- orders[o].films[f].status[t]=v;
- localStorage.setItem("orders",JSON.stringify(orders));
- autoSave();
- showOrderDetail(o);
-}
-
-initSyncStatus();
-render();
 
 </script>
 
