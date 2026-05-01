@@ -2,43 +2,27 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Filmlabor Pro Scanner</title>
+<title>Filmlabor Pro Complete</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <style>
-body {margin:0;font-family:-apple-system;background:#f2f2f2;}
-.header{padding:15px;background:white;border-bottom:1px solid #ddd;}
+body{margin:0;font-family:-apple-system;background:#f2f2f2;}
+.header{padding:15px;background:white;border-bottom:1px solid #ddd;font-weight:600;}
 .container{display:grid;grid-template-columns:1fr 2fr;height:100vh;}
 .sidebar{background:white;padding:10px;border-right:1px solid #ddd;}
-.main{padding:20px;}
-
-#scannerOverlay{
- position:fixed;
- inset:0;
- background:black;
- display:none;
- z-index:9999;
-}
-
-#reader{
- width:100%;
- height:100%;
- position:relative;
-}
-
+.main{padding:20px;overflow:auto;}
+.card{background:white;padding:12px;margin-bottom:10px;border-radius:10px;}
+.film{margin-top:10px;border-top:1px solid #eee;padding-top:10px;}
+button{padding:10px;margin-top:5px;}
+#scannerOverlay{position:fixed;inset:0;background:black;display:none;z-index:9999;}
+#reader{width:100%;height:100%;position:relative;}
 .scan-frame{
- position:absolute;
- top:50%;
- left:50%;
- width:250px;
- height:250px;
+ position:absolute;top:50%;left:50%;
+ width:250px;height:250px;
  transform:translate(-50%,-50%);
  border:2px solid white;
  box-shadow:0 0 0 9999px rgba(0,0,0,0.5);
 }
-
-button{padding:10px;margin-top:10px;}
-.card{background:white;padding:10px;margin-top:10px;border-radius:10px;}
 </style>
 </head>
 
@@ -50,6 +34,8 @@ button{padding:10px;margin-top:10px;}
 
 <div class="sidebar">
 <button onclick="startScanner()">📷 Scan</button>
+<button onclick="showJournal()">📓 Journal</button>
+<input id="searchInput" placeholder="Suche..." oninput="showJournal()" style="width:100%;margin-top:10px;">
 <div id="orderList"></div>
 </div>
 
@@ -59,60 +45,184 @@ button{padding:10px;margin-top:10px;}
 
 </div>
 
-<!-- Scanner Overlay -->
+<!-- Scanner -->
 <div id="scannerOverlay">
-  <div id="reader">
-    <div class="scan-frame"></div>
-  </div>
-  <button onclick="stopScanner()" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);">
-    Abbrechen
-  </button>
+ <div id="reader"><div class="scan-frame"></div></div>
+ <button onclick="stopScanner()" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);">Abbrechen</button>
 </div>
 
 <script src="https://unpkg.com/html5-qrcode"></script>
 
 <script>
 
-let scanner;
-let scanning=false;
+let scanner, scanning=false;
 
 function startScanner(){
  document.getElementById("scannerOverlay").style.display="block";
-
  scanner=new Html5Qrcode("reader");
  scanning=true;
 
- scanner.start(
-  {facingMode:"environment"},
-  {fps:10,qrbox:250},
+ scanner.start({facingMode:"environment"},{fps:10,qrbox:250},
   async(text)=>{
-    if(!scanning) return;
-    scanning=false;
-
-    await scanner.stop();
-    document.getElementById("scannerOverlay").style.display="none";
-
-    handleQR(text);
-  }
- );
+   if(!scanning) return;
+   scanning=false;
+   await scanner.stop();
+   document.getElementById("scannerOverlay").style.display="none";
+   handleQR(text);
+  });
 }
 
 function stopScanner(){
  scanning=false;
- if(scanner){
-  scanner.stop().catch(()=>{});
- }
+ if(scanner) scanner.stop().catch(()=>{});
  document.getElementById("scannerOverlay").style.display="none";
 }
 
 function handleQR(text){
  try{
-  const data=JSON.parse(text);
-  alert("QR OK: "+data.name);
+  let data=JSON.parse(text);
+  if(typeof data==="string") data=JSON.parse(data);
+
+  const order=generateOrder(data);
+  saveOrder(order);
  }catch{
-  alert("QR gelesen: "+text);
+  alert("QR ungültig");
  }
 }
+
+function generateOrderNumber(){
+ const d=new Date();
+ const date=d.getFullYear().toString().slice(2)+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0");
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ let max=0;
+ orders.forEach(o=>{
+  if(o.orderNumber && o.orderNumber.startsWith("FL-"+date)){
+   const n=parseInt(o.orderNumber.split("-")[2]);
+   if(n>max) max=n;
+  }
+ });
+ return "FL-"+date+"-"+String(max+1).padStart(3,"0");
+}
+
+function generateOrder(data){
+ const orderNumber=generateOrderNumber();
+ return {
+  orderNumber,
+  name:data.name||"Unbekannt",
+  createdAt:new Date().toISOString(),
+  locked:false,
+  films:(data.films||[]).map((f,i)=>({
+   filmNumber:orderNumber+"-"+String(i+1).padStart(2,"0"),
+   tasks:{dev:true,scan:f.scan||false},
+   status:{dev:"offen",scan:f.scan?"offen":null}
+  }))
+ };
+}
+
+function saveOrder(order){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ orders.unshift(order);
+ localStorage.setItem("orders",JSON.stringify(orders));
+ render();
+}
+
+function render(){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ const list=document.getElementById("orderList");
+ list.innerHTML="";
+ orders.forEach((o,i)=>{
+  const div=document.createElement("div");
+  div.className="card";
+  div.innerText=o.orderNumber;
+  div.onclick=()=>showOrderDetail(i);
+  list.appendChild(div);
+ });
+}
+
+function showJournal(){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ const q=(document.getElementById("searchInput").value||"").toLowerCase();
+ const detail=document.getElementById("detail");
+ detail.innerHTML="";
+ orders.forEach((o,i)=>{
+  if(q && !(o.orderNumber+" "+o.name).toLowerCase().includes(q)) return;
+  const c=document.createElement("div");
+  c.className="card";
+  c.innerHTML="<strong>"+o.orderNumber+"</strong><br>"+o.name;
+  c.onclick=()=>showOrderDetail(i);
+  detail.appendChild(c);
+ });
+}
+
+function showOrderDetail(i){
+ let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+ const o=orders[i];
+ const detail=document.getElementById("detail");
+ detail.innerHTML="";
+
+ const card=document.createElement("div");
+ card.className="card";
+ card.innerHTML="<button onclick='showJournal()'>←</button><br><br><strong>"+o.orderNumber+"</strong><br>"+o.name;
+
+ const btn=document.createElement("button");
+ btn.innerText=o.locked?"Abgeschlossen":"Abschließen";
+ btn.disabled=o.locked;
+ btn.onclick=()=>{
+  o.locked=true;
+  localStorage.setItem("orders",JSON.stringify(orders));
+  showOrderDetail(i);
+ };
+
+ card.appendChild(btn);
+
+ o.films.forEach((f,fi)=>{
+  const div=document.createElement("div");
+  div.className="film";
+
+  let html="<strong>"+f.filmNumber+"</strong><br>";
+
+  if(f.tasks.dev){
+   html+=`Entwicklung <select ${o.locked?"disabled":""}
+   onchange="updateTask(${i},${fi},'dev',this.value)">
+   <option ${f.status.dev==="offen"?"selected":""}>offen</option>
+   <option ${f.status.dev==="fertig"?"selected":""}>fertig</option>
+   </select><br>`;
+  }
+
+  if(f.tasks.scan){
+   html+=`Scan <select ${o.locked?"disabled":""}
+   onchange="updateTask(${i},${fi},'scan',this.value)">
+   <option ${f.status.scan==="offen"?"selected":""}>offen</option>
+   <option ${f.status.scan==="fertig"?"selected":""}>fertig</option>
+   </select>`;
+  }
+
+  div.innerHTML=html;
+  card.appendChild(div);
+ });
+
+ detail.appendChild(card);
+
+ if(o.locked){
+  let dev=0,scan=0;
+  o.films.forEach(f=>{if(f.tasks.dev)dev++;if(f.tasks.scan)scan++;});
+  const pos=document.createElement("div");
+  pos.className="card";
+  pos.innerHTML="<strong>Rechnungspositionen</strong><br><br>"
+  +(dev? "Entwicklung ("+dev+"x)<br>":"")
+  +(scan? "Scan ("+scan+"x)":"");
+  detail.appendChild(pos);
+ }
+}
+
+function updateTask(o,f,t,v){
+ let orders=JSON.parse(localStorage.getItem("orders"));
+ orders[o].films[f].status[t]=v;
+ localStorage.setItem("orders",JSON.stringify(orders));
+ showOrderDetail(o);
+}
+
+render();
 
 </script>
 
